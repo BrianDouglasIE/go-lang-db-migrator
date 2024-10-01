@@ -1,11 +1,11 @@
-package migrations
+package migrator
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"go-migrations/pkg/db_utils"
+	"go-migrations/utilities"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,35 +13,40 @@ import (
 	"strings"
 )
 
-func Migrate(opts *MigrationOptions) error {
+func Migrate(ctx context.Context, opts *Options) (lastestMigration *Migration, err error) {
+	fail := func(err error) (*Migration, error) {
+		return nil, fmt.Errorf("Migrate: %v", err)
+	}
+
 	dbPath := os.Getenv("DB_PATH")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		log.Fatalf("Failed to open SQLite database: %v", err)
+		return fail(err)
 	}
 	defer db.Close()
 
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fail(err)
+	}
+
+	defer tx.Rollback()
+
 	migrationFiles, err := getAllUpMigrationFiles()
 	if err != nil {
-		return err
+		return fail(err)
 	}
 
-	currentMigration, err := GetCurrentMigrationVersion(db)
+	currentMigration, err := GetLastMigration(tx, ctx)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 
-	if currentMigration.Version == 0 {
-		fmt.Println("No migrations currently applied.")
-	} else {
-		fmt.Printf("Current migration version is [%v]: %q. \n", currentMigration.Version, currentMigration.Name)
-	}
-
-	var migrations MigrationSlice
+	var migrations Slice
 	for _, file := range migrationFiles {
 		m, err := createMigrationFromSourceFile(file)
 		if err != nil {
-			return err
+			return fail(err)
 		}
 
 		migrations = append(migrations, m)
@@ -50,42 +55,69 @@ func Migrate(opts *MigrationOptions) error {
 
 	if opts.All {
 		migrationsToRun := migrations[currentMigration.Version:]
-		return applyMigrations(migrationsToRun, db)
+		err := applyMigrations(migrationsToRun, tx, ctx)
+		if err != nil {
+			return fail(err)
+		}
 	}
 
 	if opts.Up > 0 {
 		migrationsToRun := migrations[currentMigration.Version : currentMigration.Version+opts.Up]
-		return applyMigrations(migrationsToRun, db)
+		err := applyMigrations(migrationsToRun, tx, ctx)
+		if err != nil {
+			return fail(err)
+		}
 	}
 
 	if opts.Down > 0 {
 		migrationsToRun := migrations[currentMigration.Version-opts.Down : currentMigration.Version]
-		return revertMigrations(migrationsToRun, db)
+		err := revertMigrations(migrationsToRun, tx, ctx)
+		if err != nil {
+			return fail(err)
+		}
 	}
 
 	if opts.To > 0 {
 		if currentMigration.Version < opts.To {
 			migrationsToRun := migrations[currentMigration.Version:opts.To]
-			return applyMigrations(migrationsToRun, db)
+			err := applyMigrations(migrationsToRun, tx, ctx)
+			if err != nil {
+				return fail(err)
+			}
 		}
 
 		if currentMigration.Version > opts.To {
 			migrationsToRun := migrations[opts.To:currentMigration.Version]
-			return revertMigrations(migrationsToRun, db)
+			err := revertMigrations(migrationsToRun, tx, ctx)
+			if err != nil {
+				return fail(err)
+			}
 		}
 	}
 
 	if opts.Clean && currentMigration.Version > 0 {
-		return revertMigrations(migrations, db)
+		err := revertMigrations(migrations, tx, ctx)
+		if err != nil {
+			return fail(err)
+		}
 	}
 
-	return nil
+	lastMigration, err := GetLastMigration(tx, ctx)
+	if err != nil {
+		return fail(err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fail(err)
+	}
+
+	return lastMigration, nil
 }
 
-func applyMigrations(migrations MigrationSlice, db *sql.DB) error {
+func applyMigrations(migrations Slice, tx *sql.Tx, ctx context.Context) error {
 	for _, m := range migrations {
 		fmt.Printf("Applying %v: %q \n", m.Version, m.Name)
-		_, err := m.Apply(db)
+		_, err := m.Apply(tx, ctx)
 		if err != nil {
 			return err
 		}
@@ -93,11 +125,11 @@ func applyMigrations(migrations MigrationSlice, db *sql.DB) error {
 	return nil
 }
 
-func revertMigrations(migrations MigrationSlice, db *sql.DB) error {
+func revertMigrations(migrations Slice, tx *sql.Tx, ctx context.Context) error {
 	for i := len(migrations) - 1; i >= 0; i-- {
 		m := migrations[i]
 		fmt.Printf("Reverting %v: %q \n", m.Version, m.Name)
-		_, err := m.Revert(db)
+		_, err := m.Revert(tx, ctx)
 		if err != nil {
 			return err
 		}
@@ -105,12 +137,12 @@ func revertMigrations(migrations MigrationSlice, db *sql.DB) error {
 	return nil
 }
 
-func GetCurrentMigrationVersion(db *sql.DB) (*Migration, error) {
+func GetLastMigration(tx *sql.Tx, ctx context.Context) (*Migration, error) {
 	query := "SELECT version, name FROM migrations ORDER BY version DESC LIMIT 1"
-	row := db.QueryRow(query)
+	row := tx.QueryRowContext(ctx, query)
 	migration := Migration{Version: 0, Name: ""}
 
-	migrationTableExists, err := db_utils.TableExists(db, "migrations")
+	migrationTableExists, err := utilities.TableExists(tx, "migrations")
 	if err != nil {
 		return &migration, err
 	}

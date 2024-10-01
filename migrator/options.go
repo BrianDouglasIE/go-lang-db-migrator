@@ -1,6 +1,6 @@
-package migrations
+package migrator
 
-type MigrationOptions struct {
+type Options struct {
 	To    int
 	Up    int
 	Down  int

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"go-migrations/pkg/migrations"
+	"fmt"
+	"go-migrations/migrator"
 	"log"
 
 	"github.com/joho/godotenv"
@@ -15,17 +17,19 @@ func main() {
 		log.Fatalf("failed to load .end file")
 	}
 
-	to := flag.Int("to", 0, "Migrate to a specific version")
-	up := flag.Int("up", 0, "Migrate up a certain number of versions")
-	down := flag.Int("down", 0, "Migrate down a certain number of versions")
-	clean := flag.Bool("clean", false, "Revert all migrations")
-	all := flag.Bool("all", false, "Apply all pending migrations")
-
+	var opts migrator.Options
+	flag.BoolVar(&opts.All, "all", false, "Apply all pending migrations")
+	flag.BoolVar(&opts.Clean, "clean", false, "Revert all migrations")
+	flag.IntVar(&opts.To, "to", 0, "Migrate to a specific version")
+	flag.IntVar(&opts.Up, "up", 0, "Migrate up a certain number of versions")
+	flag.IntVar(&opts.Down, "down", 0, "Migrate down a certain number of versions")
 	flag.Parse()
 
-	opts := migrations.MigrationOptions{All: *all, To: *to, Up: *up, Down: *down, Clean: *clean}
-	err = migrations.Migrate(&opts)
+	ctx := context.Background()
+	lastestMigration, err := migrator.Migrate(ctx, &opts)
 	if err != nil {
 		log.Fatalf("Failed to migrate: %v", err)
 	}
+
+	fmt.Printf("DB currently at v%v: %q \n", lastestMigration.Version, lastestMigration.Name)
 }

@@ -1,4 +1,4 @@
-package db_utils
+package utilities
 
 import "database/sql"
 
@@ -13,7 +13,7 @@ func RowExists(row *sql.Row) (bool, error) {
 	return true, nil
 }
 
-func TableExists(db *sql.DB, tableName string) (bool, error) {
+func TableExists(db *sql.Tx, tableName string) (bool, error) {
 	query := "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
 	row := db.QueryRow(query, tableName)
 
