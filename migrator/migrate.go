@@ -95,7 +95,7 @@ func Migrate(ctx context.Context, opts *Options) (lastestMigration *Migration, e
 		}
 	}
 
-	if opts.Clean && currentMigration.Version > 0 {
+	if opts.Reset && currentMigration.Version > 0 {
 		err := revertMigrations(migrations, tx, ctx)
 		if err != nil {
 			return fail(err)

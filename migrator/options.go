@@ -5,5 +5,5 @@ type Options struct {
 	Up    int
 	Down  int
 	All   bool
-	Clean bool
+	Reset bool
 }

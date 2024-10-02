@@ -1,7 +1,7 @@
 ```
   -all
         Apply all pending migrations
-  -clean
+  -reset
         Revert all migrations
   -down int
         Migrate down a certain number of versions
